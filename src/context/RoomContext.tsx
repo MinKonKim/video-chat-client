@@ -24,6 +24,8 @@ export const RoomProvider: React.FC<RoomProviderProps> = ({ children }) => {
   const [me, setMe] = useState<Peer>();
   const [stream, setStream] = useState<MediaStream>();
   const [peers, dispatch] = useReducer(peersReducer, {});
+  const [screenSharingId, setScreenSharingId] = useState<string>();
+  const [roomId, setRoomId] = useState<string>();
 
   const enterRoom = ({ roomId }: { roomId: "string" }) => {
     console.log({ roomId });
@@ -34,6 +36,29 @@ export const RoomProvider: React.FC<RoomProviderProps> = ({ children }) => {
   };
   const removePeer = (peerId: string) => {
     dispatch(removePeerAction(peerId));
+  };
+  const switchStream = (stream: MediaStream) => {
+    setStream(stream);
+    setScreenSharingId(me?.id || "");
+    // 모든 유저에게 내 화면을 보여주기 위한 로직
+    Object.keys(me?.connections).forEach((connection: any) => {
+      const videoTrack = stream
+        ?.getTracks()
+        .find((track) => track.kind === "video");
+      connection[0].peerConnection
+        .getSenders()[1]
+        .replaceTrack(videoTrack)
+        .catch((error: any) => console.error(error));
+    });
+  };
+  const shareScreen = () => {
+    if (screenSharingId) {
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: true })
+        .then(switchStream);
+    } else {
+      navigator.mediaDevices.getDisplayMedia({}).then(switchStream);
+    }
   };
   useEffect(() => {
     const meId = uuidV4();
@@ -53,7 +78,25 @@ export const RoomProvider: React.FC<RoomProviderProps> = ({ children }) => {
     ws.on("room-created", enterRoom);
     ws.on("get-users", getUsers);
     ws.on("user-disonnected", removePeer);
+    ws.on("user-started-sharing", (peerId) => setScreenSharingId(peerId));
+    ws.on("user-stopped-sharing", () => setScreenSharingId(""));
+
+    return () => {
+      ws.off("room-created");
+      ws.off("get-users");
+      ws.off("user-disonnected");
+      ws.off("user-started-sharing");
+      ws.off("user-stopped-sharing");
+    };
   }, []);
+
+  useEffect(() => {
+    if (screenSharingId) {
+      ws.emit("start-sharing", { peerId: screenSharingId, roomId });
+    } else {
+      ws.emit("stop-sharing");
+    }
+  }, [screenSharingId, roomId]);
 
   useEffect(() => {
     if (!me) return;
@@ -77,7 +120,9 @@ export const RoomProvider: React.FC<RoomProviderProps> = ({ children }) => {
   console.log({ peers });
 
   return (
-    <RoomContext.Provider value={{ ws, me, stream, peers }}>
+    <RoomContext.Provider
+      value={{ ws, me, stream, peers, shareScreen, screenSharingId, setRoomId }}
+    >
       {children}
     </RoomContext.Provider>
   );
